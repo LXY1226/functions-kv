@@ -65,9 +65,6 @@ kv := functionskv.New[Token](
   "https://your-edgeone-domain",
   "__Host-Auth=...",
   "115-open",
-  functionskv.WithValidator[Token](func(v Token) bool {
-    return v.AccessToken != "" && v.RefreshToken != ""
-  }),
 )
 ```
 

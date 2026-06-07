@@ -10,67 +10,30 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 )
 
 const VersionHeader = "X-KV-Version"
 
-var (
-	ErrNotFound     = errors.New("functions-kv value not found")
-	ErrInvalidValue = errors.New("functions-kv invalid value")
-)
+var ErrNotFound = errors.New("functions-kv value not found")
 
 type Versioned[T any] struct {
 	Value   T
 	Version string
 }
 
-type Option[T any] func(*Client[T])
-
 type Client[T any] struct {
-	baseURL    string
-	cookie     string
-	key        string
-	httpClient *http.Client
-	validate   func(T) bool
-	beforeSave func(T) T
-
-	mu      sync.Mutex
+	baseURL string
+	cookie  string
+	key     string
 	version string
 }
 
-func New[T any](baseURL, auth, key string, opts ...Option[T]) *Client[T] {
-	c := &Client[T]{
-		baseURL:    strings.TrimRight(strings.TrimSpace(baseURL), "/"),
-		cookie:     NormalizeAuthCookie(auth),
-		key:        strings.Trim(strings.TrimSpace(key), "/"),
-		httpClient: http.DefaultClient,
-	}
-	for _, opt := range opts {
-		opt(c)
-	}
-	if c.httpClient == nil {
-		c.httpClient = http.DefaultClient
-	}
-	return c
-}
-
-func WithHTTPClient[T any](httpClient *http.Client) Option[T] {
-	return func(c *Client[T]) {
-		c.httpClient = httpClient
-	}
-}
-
-func WithValidator[T any](validate func(T) bool) Option[T] {
-	return func(c *Client[T]) {
-		c.validate = validate
-	}
-}
-
-func WithBeforeSave[T any](beforeSave func(T) T) Option[T] {
-	return func(c *Client[T]) {
-		c.beforeSave = beforeSave
+func New[T any](baseURL, auth, key string) *Client[T] {
+	return &Client[T]{
+		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
+		cookie:  NormalizeAuthCookie(auth),
+		key:     strings.Trim(strings.TrimSpace(key), "/"),
 	}
 }
 
@@ -85,16 +48,12 @@ func NormalizeAuthCookie(auth string) string {
 func (c *Client[T]) Init(ctx context.Context, local T) (T, error) {
 	value, err := c.Get(ctx)
 	if err == nil {
-		c.setVersion(value.Version)
+		c.version = value.Version
 		return value.Value, nil
 	}
 	if !errors.Is(err, ErrNotFound) {
 		var zero T
 		return zero, err
-	}
-	if !c.valid(local) {
-		var zero T
-		return zero, ErrInvalidValue
 	}
 	if err := c.Save(ctx, local); err != nil {
 		var zero T
@@ -122,7 +81,7 @@ func (c *Client[T]) Save(ctx context.Context, value T) error {
 	if err != nil {
 		return err
 	}
-	c.setVersion(saved.Version)
+	c.version = saved.Version
 	return nil
 }
 
@@ -134,7 +93,7 @@ func (c *Client[T]) Delete(ctx context.Context) error {
 	if res.statusCode >= 400 {
 		return fmt.Errorf("functions-kv DELETE failed: %s", res.bodyString())
 	}
-	c.setVersion("")
+	c.version = ""
 	return nil
 }
 
@@ -145,7 +104,7 @@ func (c *Client[T]) BeforeRefresh(ctx context.Context) (*T, error) {
 			return nil, err
 		}
 		if value != nil {
-			c.setVersion(value.Version)
+			c.version = value.Version
 			current := value.Value
 			return &current, nil
 		}
@@ -165,21 +124,19 @@ func (c *Client[T]) AfterRefresh(ctx context.Context, value T) error {
 	if err != nil {
 		return err
 	}
-	c.setVersion(saved.Version)
+	c.version = saved.Version
 	return nil
 }
 
 func (c *Client[T]) lock(ctx context.Context) (*Versioned[T], bool, error) {
-	version := c.getVersion()
-	if version == "" {
+	if c.version == "" {
 		value, err := c.Get(ctx)
 		if err != nil {
 			return nil, false, err
 		}
-		version = value.Version
-		c.setVersion(version)
+		c.version = value.Version
 	}
-	res, err := c.request(ctx, "LOCK", "?t="+url.QueryEscape(version), nil)
+	res, err := c.request(ctx, "LOCK", "?t="+url.QueryEscape(c.version), nil)
 	if err != nil {
 		return nil, false, err
 	}
@@ -199,7 +156,6 @@ func (c *Client[T]) lock(ctx context.Context) (*Versioned[T], bool, error) {
 }
 
 func (c *Client[T]) post(ctx context.Context, method string, value T) (*Versioned[T], error) {
-	value = c.prepare(value)
 	body, err := json.Marshal(value)
 	if err != nil {
 		return nil, err
@@ -234,7 +190,7 @@ func (c *Client[T]) request(ctx context.Context, method, suffix string, body []b
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := c.httpClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -254,33 +210,7 @@ func (c *Client[T]) parse(body []byte, version string) (*Versioned[T], error) {
 	if err := json.Unmarshal(body, &value); err != nil {
 		return nil, err
 	}
-	if !c.valid(value) {
-		return nil, ErrInvalidValue
-	}
 	return &Versioned[T]{Value: value, Version: version}, nil
-}
-
-func (c *Client[T]) prepare(value T) T {
-	if c.beforeSave == nil {
-		return value
-	}
-	return c.beforeSave(value)
-}
-
-func (c *Client[T]) valid(value T) bool {
-	return c.validate == nil || c.validate(value)
-}
-
-func (c *Client[T]) getVersion() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.version
-}
-
-func (c *Client[T]) setVersion(version string) {
-	c.mu.Lock()
-	c.version = version
-	c.mu.Unlock()
 }
 
 type response struct {

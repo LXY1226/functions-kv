@@ -13,11 +13,6 @@ import (
 type testValue struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
-	RefreshTime  int64  `json:"refresh_time"`
-}
-
-func (v testValue) valid() bool {
-	return v.AccessToken != "" && v.RefreshToken != ""
 }
 
 func TestNormalizeAuthCookie(t *testing.T) {
@@ -33,13 +28,7 @@ func TestInitSavesLocalWhenRemoteMissing(t *testing.T) {
 	server := newKVTestServer(t)
 	defer server.Close()
 
-	client := New[testValue](server.URL, "secret", "token",
-		WithValidator[testValue](func(v testValue) bool { return v.valid() }),
-		WithBeforeSave[testValue](func(v testValue) testValue {
-			v.RefreshTime = 42
-			return v
-		}),
-	)
+	client := New[testValue](server.URL, "secret", "token")
 	value, err := client.Init(context.Background(), testValue{AccessToken: "a", RefreshToken: "r"})
 	if err != nil {
 		t.Fatal(err)
@@ -52,8 +41,8 @@ func TestInitSavesLocalWhenRemoteMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if remote.Value.RefreshTime != 42 {
-		t.Fatalf("remote RefreshTime = %d", remote.Value.RefreshTime)
+	if remote.Value.AccessToken != "a" || remote.Value.RefreshToken != "r" {
+		t.Fatalf("remote value = %#v", remote.Value)
 	}
 }
 
@@ -61,15 +50,11 @@ func TestBeforeRefreshReturnsRemoteWhenVersionChanged(t *testing.T) {
 	server := newKVTestServer(t)
 	defer server.Close()
 
-	client := New[testValue](server.URL, "secret", "token",
-		WithValidator[testValue](func(v testValue) bool { return v.valid() }),
-	)
+	client := New[testValue](server.URL, "secret", "token")
 	if err := client.Save(context.Background(), testValue{AccessToken: "old", RefreshToken: "old-r"}); err != nil {
 		t.Fatal(err)
 	}
-	other := New[testValue](server.URL, "secret", "token",
-		WithValidator[testValue](func(v testValue) bool { return v.valid() }),
-	)
+	other := New[testValue](server.URL, "secret", "token")
 	if err := other.Save(context.Background(), testValue{AccessToken: "new", RefreshToken: "new-r"}); err != nil {
 		t.Fatal(err)
 	}
@@ -87,9 +72,7 @@ func TestBeforeAndAfterRefreshLockLifecycle(t *testing.T) {
 	server := newKVTestServer(t)
 	defer server.Close()
 
-	client := New[testValue](server.URL, "secret", "token",
-		WithValidator[testValue](func(v testValue) bool { return v.valid() }),
-	)
+	client := New[testValue](server.URL, "secret", "token")
 	if err := client.Save(context.Background(), testValue{AccessToken: "old", RefreshToken: "old-r"}); err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +169,7 @@ func newKVTestServer(t *testing.T) *httptest.Server {
 func validJSON(t *testing.T, body string) bool {
 	t.Helper()
 	var value testValue
-	return json.Unmarshal([]byte(body), &value) == nil && value.valid()
+	return json.Unmarshal([]byte(body), &value) == nil
 }
 
 func ioReadAllString(r *http.Request) (string, error) {
