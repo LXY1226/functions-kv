@@ -1,0 +1,11 @@
+{
+  "name": "functions-kv",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "dependencies": {
+    "@edgeone/pages-blob": "^0.0.11"
+  }
+}
