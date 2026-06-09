@@ -97,7 +97,8 @@ func (c *Client[T]) Delete(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client[T]) BeforeRefresh(ctx context.Context) (*T, error) {
+// Lock Locks kv and return current value
+func (c *Client[T]) Lock(ctx context.Context) (*T, error) {
 	for {
 		value, locked, err := c.lock(ctx)
 		if err != nil {
@@ -119,7 +120,8 @@ func (c *Client[T]) BeforeRefresh(ctx context.Context) (*T, error) {
 	}
 }
 
-func (c *Client[T]) AfterRefresh(ctx context.Context, value T) error {
+// Unlock Unlocks kv and update value if value is valid
+func (c *Client[T]) Unlock(ctx context.Context, value T) error {
 	saved, err := c.post(ctx, "UNLOCK", value)
 	if err != nil {
 		return err
